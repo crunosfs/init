@@ -1,0 +1,69 @@
+#!/bin/sh
+
+#set -x
+
+# needed for some binaries
+export PATH=/sbin:/usr/sbin:/bin:/usr/bin
+
+
+# disable kernel logging to stdout...
+dmesg -n 1
+
+
+# proc, sysfs
+mount -t proc proc /proc
+mount -n -t sysfs -o nodev,noexec,nosuid sysfs /sys
+
+
+# devfs
+mount -t devtmpfs -o exec,nosuid,mode=0755,size=2M devtmpfs /dev 2>/dev/null || mount -t tmpfs -o exec,nosuid,mode=0755,size=2M tmpfs /dev
+
+[ -c /dev/ptmx ] || mknod -m 666 /dev/ptmx c 5 2
+
+[ -d /dev/pts ] || mkdir -m 755 /dev/pts
+mount -t devpts -o gid=5,mode=0620,noexec,nosuid devpts /dev/pts
+
+
+# shared memory area (later system will need it)
+[ -d /dev/shm ] || mkdir /dev/shm
+mount -t tmpfs -o nodev,nosuid,noexec shm /dev/shm
+
+
+# cgroup
+mount -n -t tmpfs -o nodev,noexec,nosuid,mode=755,size=64k cgroup_root /sys/fs/cgroup
+mount -t cgroup2 none /sys/fs/cgroup/            # cgroup v2 kernel 5.x
+#mount -t cgroup -o all cgroup /sys/fs/cgroup # cgroup v1
+
+
+# detect hardware and initialize drivers
+grep -h MODALIAS /sys/bus/*/devices/*/uevent | cut -d= -f2 | xargs modprobe -abq 2> /dev/null
+grep -h MODALIAS /sys/bus/*/devices/*/uevent | cut -d= -f2 | xargs modprobe -abq 2> /dev/null
+
+
+# create rootfs partition (tmpfs)
+ROOTFS=/newroot
+mkdir $ROOTFS
+#mount -t tmpfs -o size=100m tmpfs /newroot
+mount -t tmpfs tmpfs $ROOTFS
+
+# unpack newrootfs
+tar -xf /newrootfs.tar -C $ROOTFS
+
+# base containers OR persistent mount for /containers
+tar -xf /containers.tar -C $ROOTFS/
+
+
+# prepare switch root 
+mount --move /sys $ROOTFS/sys
+mount --move /proc $ROOTFS/proc
+mount --move /dev $ROOTFS/dev
+
+### Workarounds switch_root prepare...
+rm -f $ROOTFS/linuxrc 
+cp -a /etc/inittab $ROOTFS/etc/inittab
+cp -a /lib/* $ROOTFS/lib/
+mkdir -p $ROOTFS/run/resolvconf
+touch $ROOTFS/run/resolvconf/resolv.conf
+
+# leave initrd, use newroot
+exec switch_root $ROOTFS /bin/busybox init
